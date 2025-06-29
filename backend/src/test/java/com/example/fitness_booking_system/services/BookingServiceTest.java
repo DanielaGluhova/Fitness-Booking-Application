@@ -1,3 +1,4 @@
+
 package com.example.fitness_booking_system.services;
 
 import com.example.fitness_booking_system.dto.BookingCreateDTO;
@@ -20,7 +21,7 @@ import java.util.List;
 import java.util.Optional;
 
 import static org.junit.jupiter.api.Assertions.*;
-import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -38,6 +39,9 @@ class BookingServiceTest {
     @Mock
     private TimeSlotService timeSlotService;
 
+    @Mock
+    private EmailService emailService;
+
     @InjectMocks
     private BookingService bookingService;
 
@@ -53,6 +57,7 @@ class BookingServiceTest {
     void setUp() {
         clientUser = new User();
         clientUser.setFullName("Test Client");
+        clientUser.setEmail("client@test.com");
 
         client = new Client();
         client.setId(1L);
@@ -60,6 +65,7 @@ class BookingServiceTest {
 
         trainerUser = new User();
         trainerUser.setFullName("Test Trainer");
+        trainerUser.setEmail("trainer@test.com");
 
         trainer = new Trainer();
         trainer.setId(1L);
@@ -76,7 +82,7 @@ class BookingServiceTest {
         timeSlot.setEndTime(LocalDateTime.now().plusHours(2));
         timeSlot.setBookedCount(0);
         timeSlot.setCapacity(1);
-
+        timeSlot.setStatus(TimeSlotStatus.AVAILABLE);
 
         booking = new Booking();
         booking.setId(1L);
@@ -104,7 +110,6 @@ class BookingServiceTest {
         assertThrows(ResponseStatusException.class, () -> bookingService.getClientBookings(1L));
     }
 
-
     @Test
     void shouldCreateBookingSuccessfully() {
         BookingCreateDTO createDTO = new BookingCreateDTO();
@@ -112,7 +117,7 @@ class BookingServiceTest {
 
         when(clientRepository.findById(1L)).thenReturn(Optional.of(client));
         when(timeSlotRepository.findById(1L)).thenReturn(Optional.of(timeSlot));
-        when(bookingRepository.existsByClientIdAndTimeSlotId(1L, 1L)).thenReturn(false);
+        when(bookingRepository.existsByClientIdAndTimeSlotIdAndStatusNot(1L, 1L, BookingStatus.CANCELLED)).thenReturn(false);
         when(bookingRepository.save(any(Booking.class))).thenReturn(booking);
 
         BookingDTO result = bookingService.createBooking(1L, createDTO);
@@ -121,6 +126,25 @@ class BookingServiceTest {
         assertEquals(booking.getId(), result.getId());
         verify(timeSlotService).incrementBookingCount(1L);
         verify(bookingRepository).save(any(Booking.class));
+
+        // Проверяваме че се изпращат имейли
+        verify(emailService).sendBookingConfirmationToClient(
+                eq("client@test.com"),
+                eq("Test Client"),
+                eq("Yoga"),
+                eq("Test Trainer"),
+                anyString(),
+                anyString()
+        );
+
+        verify(emailService).sendBookingNotificationToTrainer(
+                eq("trainer@test.com"),
+                eq("Test Trainer"),
+                eq("Test Client"),
+                eq("Yoga"),
+                anyString(),
+                anyString()
+        );
     }
 
     @Test
@@ -128,12 +152,18 @@ class BookingServiceTest {
         BookingCreateDTO createDTO = new BookingCreateDTO();
         createDTO.setTimeSlotId(1L);
 
+        // Настройваме timeSlot да е пълен
         timeSlot.setBookedCount(1);
+        timeSlot.setStatus(TimeSlotStatus.BOOKED);
 
         when(clientRepository.findById(1L)).thenReturn(Optional.of(client));
         when(timeSlotRepository.findById(1L)).thenReturn(Optional.of(timeSlot));
 
         assertThrows(ResponseStatusException.class, () -> bookingService.createBooking(1L, createDTO));
+
+        // Проверяваме че не се изпращат имейли при неуспешно създаване
+        verify(emailService, never()).sendBookingConfirmationToClient(anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
+        verify(emailService, never()).sendBookingNotificationToTrainer(anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
     }
 
     @Test
@@ -143,21 +173,32 @@ class BookingServiceTest {
 
         when(clientRepository.findById(1L)).thenReturn(Optional.of(client));
         when(timeSlotRepository.findById(1L)).thenReturn(Optional.of(timeSlot));
-        when(bookingRepository.existsByClientIdAndTimeSlotId(1L, 1L)).thenReturn(true);
+        when(bookingRepository.existsByClientIdAndTimeSlotIdAndStatusNot(1L, 1L, BookingStatus.CANCELLED)).thenReturn(true);
 
         assertThrows(ResponseStatusException.class, () -> bookingService.createBooking(1L, createDTO));
+
+        // Проверяваме че не се изпращат имейли при неуспешно създаване
+        verify(emailService, never()).sendBookingConfirmationToClient(anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
+        verify(emailService, never()).sendBookingNotificationToTrainer(anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
     }
 
     @Test
     void shouldThrowBadRequestWhenBookingInThePast() {
         BookingCreateDTO createDTO = new BookingCreateDTO();
         createDTO.setTimeSlotId(1L);
+
+        // Настройваме timeSlot да е в миналото
         timeSlot.setStartTime(LocalDateTime.now().minusHours(1));
 
         when(clientRepository.findById(1L)).thenReturn(Optional.of(client));
         when(timeSlotRepository.findById(1L)).thenReturn(Optional.of(timeSlot));
+        when(bookingRepository.existsByClientIdAndTimeSlotIdAndStatusNot(1L, 1L, BookingStatus.CANCELLED)).thenReturn(false);
 
         assertThrows(ResponseStatusException.class, () -> bookingService.createBooking(1L, createDTO));
+
+        // Проверяваме че не се изпращат имейли при неуспешно създаване
+        verify(emailService, never()).sendBookingConfirmationToClient(anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
+        verify(emailService, never()).sendBookingNotificationToTrainer(anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
     }
 
     @Test
@@ -171,6 +212,25 @@ class BookingServiceTest {
         assertEquals(BookingStatus.CANCELLED, result.getStatus());
         verify(timeSlotService).decrementBookingCount(booking.getTimeSlot().getId());
         verify(bookingRepository).save(booking);
+
+        // Проверяваме че се изпращат имейли за отмяна
+        verify(emailService).sendCancellationNotificationToClient(
+                eq("client@test.com"),
+                eq("Test Client"),
+                eq("Yoga"),
+                eq("Test Trainer"),
+                anyString(),
+                anyString()
+        );
+
+        verify(emailService).sendCancellationNotificationToTrainer(
+                eq("trainer@test.com"),
+                eq("Test Trainer"),
+                eq("Test Client"),
+                eq("Yoga"),
+                anyString(),
+                anyString()
+        );
     }
 
     @Test
@@ -179,6 +239,10 @@ class BookingServiceTest {
         when(bookingRepository.findById(1L)).thenReturn(Optional.of(booking));
 
         assertThrows(ResponseStatusException.class, () -> bookingService.cancelBooking(1L));
+
+        // Проверяваме че не се изпращат имейли при неуспешно отменяне
+        verify(emailService, never()).sendCancellationNotificationToClient(anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
+        verify(emailService, never()).sendCancellationNotificationToTrainer(anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
     }
 
     @Test
@@ -187,6 +251,10 @@ class BookingServiceTest {
         when(bookingRepository.findById(1L)).thenReturn(Optional.of(booking));
 
         assertThrows(ResponseStatusException.class, () -> bookingService.cancelBooking(1L));
+
+        // Проверяваме че не се изпращат имейли при неуспешно отменяне
+        verify(emailService, never()).sendCancellationNotificationToClient(anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
+        verify(emailService, never()).sendCancellationNotificationToTrainer(anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
     }
 
     @Test
@@ -194,5 +262,9 @@ class BookingServiceTest {
         when(bookingRepository.findById(1L)).thenReturn(Optional.empty());
 
         assertThrows(ResponseStatusException.class, () -> bookingService.cancelBooking(1L));
+
+        // Проверяваме че не се изпращат имейли при неуспешно отменяне
+        verify(emailService, never()).sendCancellationNotificationToClient(anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
+        verify(emailService, never()).sendCancellationNotificationToTrainer(anyString(), anyString(), anyString(), anyString(), anyString(), anyString());
     }
 }
