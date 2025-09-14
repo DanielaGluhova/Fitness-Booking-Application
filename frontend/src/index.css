@@ -1,0 +1,25 @@
+@import "tailwindcss";
+
+/* Основни стилове за светла тема */
+html {
+    background-color: white;
+    color: black;
+}
+
+body {
+    margin: 0;
+    padding: 0;
+    background-color: white;
+    color: black;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
+    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+    sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+}
+
+#root {
+    background-color: white;
+    color: black;
+    min-height: 100vh;
+}
